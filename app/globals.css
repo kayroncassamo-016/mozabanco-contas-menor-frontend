@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: #FAF7F2;
+  background-image:
+    radial-gradient(circle at 100% 0%, rgba(208,2,27,0.05), transparent 40%),
+    radial-gradient(circle at 0% 100%, rgba(232,163,61,0.06), transparent 45%);
+  background-attachment: fixed;
+  color: #1B1918;
+}
+
+::selection {
+  background-color: #D0021B;
+  color: white;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Focus visibility */
+a:focus-visible, button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid #D0021B;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
