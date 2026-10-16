@@ -72,9 +72,9 @@ export default function EactModule() {
   return (
     <div>
       <section className="mb-10">
-        <p className="mb-2 font-mono text-xs uppercase tracking-widest text-moza-red">EACT Mensal</p>
+        <p className="mb-2 font-mono text-xs uppercase tracking-widest text-moza-red">EACT SEMANAL</p>
         <h1 className="font-display text-3xl font-semibold leading-tight text-moza-ink sm:text-4xl">
-          Encerradas e Entidades Soltas.
+          Entidades EACT
         </h1>
       </section>
 
