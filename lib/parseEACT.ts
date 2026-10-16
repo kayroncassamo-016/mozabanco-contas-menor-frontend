@@ -188,7 +188,8 @@
 //   return { ...plano, metrics };
 // }
 
-// =====================================================================================================================//
+// =============================================================================================================//
+
 
 // import * as XLSX from "xlsx";
 // import type { PeriodValue } from "./parsePlano";
@@ -200,15 +201,94 @@
 //   return String(v).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 // }
 
+// /**
+//  * Detalhe opcional devolvido pelo backend (passos 1 a 10.4).
+//  * Serve para auditoria; o dashboard não depende dele.
+//  */
+// export interface EactDetalhe {
+//   excluidasPorValor?: Record<string, number>;
+//   fiabilizadasAlgumaLinha?: number;
+//   [chave: string]: unknown;
+// }
+
+// /**
+//  * Resultado devolvido pelo backend (main.py → process_eact).
+//  *
+//  * Pré-passo 1:
+//  *   totalBruto, encerradas, entidadesSoltas
+//  *
+//  * Passos 1 a 10.4 (uma linha por entidade, sem duplicados):
+//  *   totalEntidades / entidadesEact ............ total de entidades (passo 8)
+//  *   fiabilizadas ............................. 10.1
+//  *   porFiabilizar ............................ 9
+//  *   porFiabilizarConsiderandoPrioritarias .... 10.3
+//  *   entidadesEactConsiderandoPrioritarias .... 10.2
+//  *   excluidas ................................ 10.4
+//  *
+//  * Relações que o backend já garante:
+//  *   totalEntidades = fiabilizadas + porFiabilizar
+//  *   porFiabilizar  = porFiabilizarConsiderandoPrioritarias + excluidas
+//  *   totalEntidades = entidadesEactConsiderandoPrioritarias + excluidas
+//  */
 // export interface EactRawResult {
 //   totalBruto: number;
 //   encerradas: number;
 //   entidadesSoltas: number;
-  
+
 //   totalEntidades: number;
+//   entidadesEact: number;
 //   fiabilizadas: number;
 //   porFiabilizar: number;
+//   porFiabilizarConsiderandoPrioritarias: number;
+//   entidadesEactConsiderandoPrioritarias: number;
+//   excluidas: number;
+
+//   detalhe?: EactDetalhe;
+//   verificacoes?: Record<string, boolean>;
 // }
+
+// const EACT_REQUIRED_NUMBERS: (keyof EactRawResult)[] = [
+//   "totalBruto",
+//   "encerradas",
+//   "entidadesSoltas",
+//   "totalEntidades",
+//   "entidadesEact",
+//   "fiabilizadas",
+//   "porFiabilizar",
+//   "porFiabilizarConsiderandoPrioritarias",
+//   "entidadesEactConsiderandoPrioritarias",
+//   "excluidas",
+// ];
+
+// /**
+//  * Garante que o backend devolveu todos os indicadores como números.
+//  * Se faltar algum (ex.: backend desactualizado), falha com uma
+//  * mensagem clara em vez de mostrar valores em branco/NaN no dashboard.
+//  */
+// function assertEactRawResult(result: unknown): EactRawResult {
+//   if (typeof result !== "object" || result === null) {
+//     throw new EactParseError("O servidor devolveu um resultado EACT inválido.");
+//   }
+
+//   const record = result as Record<string, unknown>;
+//   const missing = EACT_REQUIRED_NUMBERS.filter((key) => {
+//     const value = record[key];
+//     return typeof value !== "number" || !Number.isFinite(value);
+//   });
+
+//   if (missing.length > 0) {
+//     throw new EactParseError(
+//       `O servidor não devolveu todos os indicadores EACT (em falta: ${missing.join(", ")}). ` +
+//         "Verifique se o backend está actualizado."
+//     );
+//   }
+
+//   return record as unknown as EactRawResult;
+// }
+
+
+
+
 
 // export async function parseEactRawWorkbook(
 //   file: File,
@@ -268,7 +348,9 @@
 
 //   // 2. Faz polling ao estado do job até terminar.
 //   const POLL_INTERVAL_MS = 3000;
-//   const MAX_ATTEMPTS = 200; // ~10 minutos no total
+//   // O processamento no servidor demora cerca de 8 minutos num ficheiro
+//   // grande (passos 1 a 10.4), por isso o limite sobe para ~20 minutos.
+//   const MAX_ATTEMPTS = 400;
 
 //   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
 //     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
@@ -289,7 +371,7 @@
 //     const status = await statusRes.json();
 
 //     if (status.status === "done") {
-//       return status.result as EactRawResult;
+//       return assertEactRawResult(status.result);
 //     }
 
 //     if (status.status === "error") {
@@ -455,9 +537,6 @@
 //   return { ...plano, metrics };
 // }
 
-// =============================================================================================================//
-
-
 import * as XLSX from "xlsx";
 import type { PeriodValue } from "./parsePlano";
 
@@ -475,7 +554,25 @@ function normalize(v: unknown): string {
 export interface EactDetalhe {
   excluidasPorValor?: Record<string, number>;
   fiabilizadasAlgumaLinha?: number;
+  semNuitOutros?: number;
   [chave: string]: unknown;
+}
+
+/**
+ * Uma entidade sem NUIT (passo 11): linha que ficou depois da tripla
+ * remoção de duplicados (passos 6 a 8), com OBS diferente de "BOM".
+ */
+export interface EactEntidadeSemNuit {
+  entidade: string | number;
+  nome: string | number;
+  nuit: string | number;
+  obs: string | number;
+  categoria: string;
+  segmento: string | number;
+  titularidade: string | number;
+  conta: string | number;
+  fiabilizada: string;
+  exclusaoPorCliente: string;
 }
 
 /**
@@ -492,10 +589,20 @@ export interface EactDetalhe {
  *   entidadesEactConsiderandoPrioritarias .... 10.2
  *   excluidas ................................ 10.4
  *
+ * Passo 11 (sobre a folha do passo 8):
+ *   entidadesSemNuit ......................... 11.1 OBS diferente de BOM
+ *   semNuitNumeroIncorrectoDigitos ........... 11.2
+ *   semNuitNaoPreenchido ..................... 11.3 (sem Conta Interna)
+ *   contasTecnicasSemNuit .................... 11.4 (Conta Interna)
+ *   entidadesSemNuitLista .................... todas as entidades sem NUIT
+ *
  * Relações que o backend já garante:
  *   totalEntidades = fiabilizadas + porFiabilizar
  *   porFiabilizar  = porFiabilizarConsiderandoPrioritarias + excluidas
  *   totalEntidades = entidadesEactConsiderandoPrioritarias + excluidas
+ *   entidadesSemNuit = semNuitNumeroIncorrectoDigitos
+ *                    + semNuitNaoPreenchido + contasTecnicasSemNuit
+ *                    (+ detalhe.semNuitOutros, normalmente 0)
  */
 export interface EactRawResult {
   totalBruto: number;
@@ -509,6 +616,12 @@ export interface EactRawResult {
   porFiabilizarConsiderandoPrioritarias: number;
   entidadesEactConsiderandoPrioritarias: number;
   excluidas: number;
+
+  entidadesSemNuit: number;
+  semNuitNumeroIncorrectoDigitos: number;
+  semNuitNaoPreenchido: number;
+  contasTecnicasSemNuit: number;
+  entidadesSemNuitLista: EactEntidadeSemNuit[];
 
   detalhe?: EactDetalhe;
   verificacoes?: Record<string, boolean>;
@@ -525,6 +638,10 @@ const EACT_REQUIRED_NUMBERS: (keyof EactRawResult)[] = [
   "porFiabilizarConsiderandoPrioritarias",
   "entidadesEactConsiderandoPrioritarias",
   "excluidas",
+  "entidadesSemNuit",
+  "semNuitNumeroIncorrectoDigitos",
+  "semNuitNaoPreenchido",
+  "contasTecnicasSemNuit",
 ];
 
 /**
@@ -550,7 +667,69 @@ function assertEactRawResult(result: unknown): EactRawResult {
     );
   }
 
+  if (!Array.isArray(record.entidadesSemNuitLista)) {
+    throw new EactParseError(
+      "O servidor não devolveu a lista de entidades sem NUIT (em falta: entidadesSemNuitLista). " +
+        "Verifique se o backend está actualizado."
+    );
+  }
+
   return record as unknown as EactRawResult;
+}
+
+/**
+ * Constrói o Excel das entidades sem NUIT (passo 11):
+ *  - folha "Entidades sem NUIT": todas as entidades, uma por linha;
+ *  - folha "Resumo": os totais do passo 11.
+ * Separado do download para poder ser testado sem browser.
+ */
+export function buildEntidadesSemNuitWorkbook(raw: EactRawResult): XLSX.WorkBook {
+  const linhas = raw.entidadesSemNuitLista.map((e) => ({
+    "Entidade Associada": e.entidade,
+    "Nome": e.nome,
+    "NUIT": e.nuit === "" ? "" : String(e.nuit),
+    "OBS": e.obs,
+    "Categoria": e.categoria,
+    "DSC_SEG": e.segmento,
+    "Titularidade": e.titularidade,
+    "Conta": e.conta,
+    "Fiabilizada": e.fiabilizada,
+    "Exclusão por Cliente": e.exclusaoPorCliente,
+  }));
+
+  const cabecalho = [
+    "Entidade Associada", "Nome", "NUIT", "OBS", "Categoria",
+    "DSC_SEG", "Titularidade", "Conta", "Fiabilizada", "Exclusão por Cliente",
+  ];
+
+  const wsEntidades = XLSX.utils.json_to_sheet(linhas, { header: cabecalho });
+  wsEntidades["!cols"] = [
+    { wch: 20 }, { wch: 34 }, { wch: 14 }, { wch: 36 }, { wch: 36 },
+    { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 20 },
+  ];
+
+  const resumo: (string | number)[][] = [
+    ["Indicador", "Total"],
+    ["Entidades sem NUIT (OBS diferente de BOM)", raw.entidadesSemNuit],
+    ["Com número incorrecto de dígitos", raw.semNuitNumeroIncorrectoDigitos],
+    ["NUIT não preenchido (sem Conta Interna)", raw.semNuitNaoPreenchido],
+    ["Contas técnicas sem NUIT (Conta Interna)", raw.contasTecnicasSemNuit],
+    ["Total de Entidades EACT", raw.totalEntidades],
+  ];
+  const wsResumo = XLSX.utils.aoa_to_sheet(resumo);
+  wsResumo["!cols"] = [{ wch: 46 }, { wch: 12 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsEntidades, "Entidades sem NUIT");
+  XLSX.utils.book_append_sheet(wb, wsResumo, "Resumo");
+  return wb;
+}
+
+/** Descarrega o Excel das entidades sem NUIT no browser. */
+export function downloadEntidadesSemNuit(raw: EactRawResult): void {
+  const wb = buildEntidadesSemNuitWorkbook(raw);
+  const hoje = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `entidades-sem-nuit-${hoje}.xlsx`, { compression: true });
 }
 
 
